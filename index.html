@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prompt Decoder - AI 绘画提示词反推</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        miku: {
+                            base: '#39C5BB',
+                            dark: '#2DA8A0',
+                            light: '#E0F2F1',
+                            accent: '#E4007F',
+                        },
+                        gray: {
+                            750: '#2d3342',
+                            800: '#1f2937',
+                            900: '#111827',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['"Nunito"', 'sans-serif'],
+                    },
+                    animation: {
+                        'blob': 'blob 7s infinite',
+                        'fade-in-up': 'fadeInUp 0.5s ease-out forwards',
+                    },
+                    keyframes: {
+                        blob: {
+                            '0%': { transform: 'translate(0px, 0px) scale(1)' },
+                            '33%': { transform: 'translate(30px, -50px) scale(1.1)' },
+                            '66%': { transform: 'translate(-20px, 20px) scale(0.9)' },
+                            '100%': { transform: 'translate(0px, 0px) scale(1)' },
+                        },
+                        fadeInUp: {
+                            '0%': { opacity: '0', transform: 'translateY(20px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Nunito', sans-serif; }
+        
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
+        }
+        .dark .glass {
+            background: rgba(17, 24, 39, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+        }
+
+        .neon-text {
+            text-shadow: 0 0 10px rgba(57, 197, 187, 0.5), 0 0 20px rgba(57, 197, 187, 0.3);
+        }
+
+        .btn-spring {
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .btn-spring:active { transform: scale(0.95); }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #39C5BB; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #2DA8A0; }
+    </style>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-100 min-h-screen flex flex-col relative overflow-x-hidden transition-colors duration-500">
+
+    <!-- Background Blobs -->
+    <div class="fixed top-0 left-0 w-full h-full overflow-hidden -z-10 pointer-events-none">
+        <div class="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-miku-base rounded-full mix-blend-multiply filter blur-[100px] opacity-20 animate-blob"></div>
+        <div class="absolute top-[20%] right-[-10%] w-[400px] h-[400px] bg-miku-accent rounded-full mix-blend-multiply filter blur-[100px] opacity-20 animate-blob animation-delay-2000"></div>
+        <div class="absolute -bottom-[10%] left-[20%] w-[600px] h-[600px] bg-blue-400 rounded-full mix-blend-multiply filter blur-[100px] opacity-20 animate-blob animation-delay-4000"></div>
+    </div>
+
+    <!-- Theme Toggle -->
+    <button id="themeToggle" class="fixed top-6 right-6 z-50 p-3 rounded-full glass shadow-lg text-miku-base hover:scale-110 hover:rotate-12 transition-all duration-300">
+        <i data-lucide="moon" class="w-6 h-6 hidden dark:block fill-current"></i>
+        <i data-lucide="sun" class="w-6 h-6 block dark:hidden fill-current"></i>
+    </button>
+
+    <!-- Warning Modal (New Feature) -->
+    <div id="warningModal" class="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center hidden opacity-0 transition-opacity duration-300">
+        <div class="bg-white dark:bg-gray-800 rounded-3xl p-6 max-w-sm w-full mx-4 shadow-2xl border border-white/20 transform scale-95 transition-transform duration-300" id="warningModalContent">
+            <div class="flex flex-col items-center text-center gap-4">
+                <div class="p-4 bg-amber-50 dark:bg-amber-900/30 rounded-full text-amber-500 shadow-inner">
+                    <i data-lucide="alert-circle" class="w-8 h-8"></i>
+                </div>
+                <div>
+                    <h3 class="text-xl font-black text-gray-800 dark:text-white mb-2">无法解析图片</h3>
+                    <p id="warningMessage" class="text-sm text-gray-500 dark:text-gray-300 leading-relaxed">
+                        <!-- Dynamic Message -->
+                    </p>
+                </div>
+                <button onclick="closeWarningModal()" class="w-full py-3 bg-gradient-to-r from-miku-base to-miku-dark hover:brightness-110 text-white font-bold rounded-xl shadow-lg hover:shadow-miku-base/30 transition-all transform active:scale-95">
+                    我知道了
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mx-auto px-4 py-12 max-w-6xl flex-grow">
+        
+        <!-- Header -->
+        <div class="text-center mb-12 animate-fade-in-up">
+            <h1 class="text-5xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-miku-base to-miku-accent mb-4 neon-text tracking-tighter">
+                PROMPT DECODER
+            </h1>
+            <p class="text-gray-500 dark:text-gray-400 text-sm font-bold uppercase tracking-[0.3em]">
+                AI 绘画提示词解析工具
+            </p>
+            <p class="text-xs text-gray-400 mt-2">支持 Stable Diffusion (WebUI) & ComfyUI 元数据本地解析</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            
+            <!-- Left: Upload & Preview -->
+            <div class="lg:col-span-5 space-y-6 animate-fade-in-up" style="animation-delay: 0.1s">
+                <!-- Upload Zone -->
+                <div id="dropZone" class="glass rounded-3xl p-8 text-center transition-all duration-300 hover:border-miku-base/50 border-2 border-transparent cursor-pointer group relative overflow-hidden h-full flex flex-col justify-center min-h-[400px]">
+                    <!-- 修改点 1: input accept 属性只保留 png -->
+                    <input type="file" id="fileInput" accept="image/png" class="hidden">
+                    
+                    <div id="uploadPlaceholder" class="flex flex-col items-center gap-4 py-10">
+                        <div class="w-20 h-20 rounded-full bg-miku-light/20 dark:bg-gray-800 flex items-center justify-center group-hover:scale-110 group-hover:bg-miku-base group-hover:text-white transition-all duration-300 text-miku-base">
+                            <i data-lucide="scan-search" class="w-10 h-10"></i>
+                        </div>
+                        <div>
+                            <p class="text-lg font-bold text-gray-700 dark:text-gray-200">拖入或点击上传图片</p>
+                            <!-- 修改点 2: 文字提示只保留 PNG -->
+                            <p class="text-xs text-gray-400 mt-1">仅支持 PNG 格式原图</p>
+                        </div>
+                    </div>
+
+                    <!-- Image Preview -->
+                    <img id="previewImg" class="hidden w-full h-auto rounded-xl shadow-lg object-contain max-h-[600px] mx-auto" alt="Preview">
+                    
+                    <!-- Reset Button overlay -->
+                    <button id="resetBtn" class="hidden absolute top-4 right-4 p-2 bg-black/50 hover:bg-black/70 text-white rounded-full backdrop-blur-md transition-all z-10">
+                        <i data-lucide="x" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right: Results -->
+            <div class="lg:col-span-7 space-y-6 animate-fade-in-up" style="animation-delay: 0.2s">
+                
+                <!-- Status Bar / Actions -->
+                <div class="glass rounded-2xl p-4 flex justify-between items-center">
+                    <div class="flex items-center gap-2 w-full">
+                        <span id="fileTypeTag" class="px-3 py-1 bg-gray-200 dark:bg-gray-700 rounded-full text-xs font-bold text-gray-600 dark:text-gray-300">UNK</span>
+                        <span id="parseStatus" class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">等待图片...</span>
+                    </div>
+                </div>
+
+                <!-- Prompts Display -->
+                <div class="glass rounded-3xl p-6 space-y-6 min-h-[400px]">
+                    
+                    <!-- Positive Prompt -->
+                    <div class="relative group">
+                        <div class="flex justify-between items-center mb-2">
+                            <label class="text-sm font-bold text-miku-base flex items-center gap-2">
+                                <i data-lucide="thumbs-up" class="w-4 h-4"></i> 正向提示词 (Positive)
+                            </label>
+                            <button class="copy-btn p-1.5 hover:bg-miku-light dark:hover:bg-gray-700 rounded-lg text-gray-400 hover:text-miku-base transition-colors" data-target="positiveText">
+                                <i data-lucide="copy" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                        <div class="relative">
+                            <textarea id="positiveText" readonly class="w-full h-32 bg-gray-50/50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-sm resize-none focus:outline-none focus:border-miku-base transition-all font-sans leading-relaxed custom-scrollbar" placeholder="等待解析..."></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Negative Prompt -->
+                    <div class="relative group">
+                        <div class="flex justify-between items-center mb-2">
+                            <label class="text-sm font-bold text-miku-accent flex items-center gap-2">
+                                <i data-lucide="thumbs-down" class="w-4 h-4"></i> 负向提示词 (Negative)
+                            </label>
+                            <button class="copy-btn p-1.5 hover:bg-pink-50 dark:hover:bg-gray-700 rounded-lg text-gray-400 hover:text-miku-accent transition-colors" data-target="negativeText">
+                                <i data-lucide="copy" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                        <div class="relative">
+                            <textarea id="negativeText" readonly class="w-full h-24 bg-gray-50/50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-sm resize-none focus:outline-none focus:border-miku-accent transition-all font-sans leading-relaxed custom-scrollbar" placeholder="等待解析..."></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Settings Grid -->
+                    <div>
+                        <label class="text-sm font-bold text-gray-500 dark:text-gray-400 mb-3 block flex items-center gap-2">
+                            <i data-lucide="settings" class="w-4 h-4"></i> 生成参数 (Parameters)
+                        </label>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="paramsGrid">
+                            <!-- Params -->
+                            <div class="p-3 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-miku-base dark:hover:border-miku-base transition-colors cursor-pointer group relative" onclick="copyParam('paramSteps')">
+                                <span class="block text-[10px] text-gray-400 uppercase font-bold mb-1">Steps</span>
+                                <span class="text-sm font-bold text-gray-700 dark:text-gray-200 break-all line-clamp-2 leading-tight" id="paramSteps">-</span>
+                                <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"><i data-lucide="copy" class="w-3 h-3 text-miku-base"></i></div>
+                            </div>
+                            <div class="p-3 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-miku-base dark:hover:border-miku-base transition-colors cursor-pointer group relative" onclick="copyParam('paramSampler')">
+                                <span class="block text-[10px] text-gray-400 uppercase font-bold mb-1">Sampler</span>
+                                <span class="text-sm font-bold text-gray-700 dark:text-gray-200 break-words line-clamp-2 leading-tight" id="paramSampler">-</span>
+                                <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"><i data-lucide="copy" class="w-3 h-3 text-miku-base"></i></div>
+                            </div>
+                            <div class="p-3 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-miku-base dark:hover:border-miku-base transition-colors cursor-pointer group relative" onclick="copyParam('paramSeed')">
+                                <span class="block text-[10px] text-gray-400 uppercase font-bold mb-1">Seed</span>
+                                <span class="text-sm font-bold text-gray-700 dark:text-gray-200 break-all line-clamp-2 leading-tight" id="paramSeed">-</span>
+                                <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"><i data-lucide="copy" class="w-3 h-3 text-miku-base"></i></div>
+                            </div>
+                            <div class="p-3 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-miku-base dark:hover:border-miku-base transition-colors cursor-pointer group relative" onclick="copyParam('paramModel')">
+                                <span class="block text-[10px] text-gray-400 uppercase font-bold mb-1">Model</span>
+                                <span class="text-sm font-bold text-gray-700 dark:text-gray-200 break-all line-clamp-2 leading-tight" id="paramModel">-</span>
+                                <div class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"><i data-lucide="copy" class="w-3 h-3 text-miku-base"></i></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Raw Data Toggle & Export -->
+                    <div class="pt-4 border-t border-gray-200 dark:border-gray-700/50">
+                        <div class="flex justify-between items-center mb-2">
+                            <details class="group w-full">
+                                <summary class="flex items-center justify-between w-full text-xs text-gray-400 cursor-pointer hover:text-miku-base transition-colors select-none list-none">
+                                    <div class="flex items-center gap-2">
+                                        <i data-lucide="code" class="w-3 h-3"></i> 
+                                        <span>查看原始数据 (Raw JSON)</span>
+                                        <i data-lucide="chevron-down" class="w-3 h-3 group-open:rotate-180 transition-transform"></i>
+                                    </div>
+                                    
+                                    <button id="exportBtn" disabled class="flex items-center gap-1 px-3 py-1 bg-gray-100 dark:bg-gray-800 hover:bg-miku-base hover:text-white text-gray-500 dark:text-gray-400 rounded-lg transition-all disabled:opacity-0 disabled:cursor-default text-[10px] font-bold shadow-sm font-sans">
+                                        <i data-lucide="download" class="w-3 h-3"></i> 导出 .json
+                                    </button>
+                                </summary>
+                                <pre id="rawMetadata" class="mt-3 p-4 bg-gray-900 text-green-400 rounded-xl text-[10px] overflow-x-auto font-sans max-h-60 custom-scrollbar border border-gray-700/50">暂无数据</pre>
+                            </details>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer / Contact Info -->
+        <div class="mt-12 pb-8 text-center text-gray-400 dark:text-gray-600 text-xs font-medium space-y-2">
+            <p>所有处理均在您的浏览器本地进行，不会上传图片至任何服务器。</p>
+            
+            <div class="flex flex-wrap justify-center items-center gap-3 opacity-80 hover:opacity-100 transition-opacity pt-2">
+                <span>如果有任何问题欢迎联系作者:</span>
+                
+                <!-- 邮箱：普通文本，方便复制 -->
+                <span class="flex items-center gap-1 cursor-text select-all hover:text-miku-base transition-colors">
+                    <i data-lucide="mail" class="w-3.5 h-3.5"></i>
+                    <span>huiz3108@gmail.com</span>
+                </span>
+                
+                <span class="text-gray-300 dark:text-gray-700 mx-1">|</span>
+                
+                <!-- GitHub 链接 -->
+                <a href="https://github.com/eviost" target="_blank" rel="noopener noreferrer" class="flex items-center gap-1 hover:text-miku-base transition-colors underline decoration-dotted underline-offset-2" title="访问 GitHub 主页">
+                    <i data-lucide="github" class="w-3.5 h-3.5"></i>
+                    <span>GitHub</span>
+                </a>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- Global & Utils ---
+        lucide.createIcons();
+
+        // Elements
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const previewImg = document.getElementById('previewImg');
+        const uploadPlaceholder = document.getElementById('uploadPlaceholder');
+        const resetBtn = document.getElementById('resetBtn');
+        
+        const positiveText = document.getElementById('positiveText');
+        const negativeText = document.getElementById('negativeText');
+        const rawMetadata = document.getElementById('rawMetadata');
+        const parseStatus = document.getElementById('parseStatus');
+        const fileTypeTag = document.getElementById('fileTypeTag');
+        const exportBtn = document.getElementById('exportBtn');
+        
+        // Warning Modal Elements
+        const warningModal = document.getElementById('warningModal');
+        const warningModalContent = document.getElementById('warningModalContent');
+        const warningMessage = document.getElementById('warningMessage');
+
+        let currentRawData = ""; 
+        let currentRawType = "txt"; 
+
+        // --- Theme Logic ---
+        const htmlEl = document.documentElement;
+        const themeToggle = document.getElementById('themeToggle');
+        
+        function initTheme() {
+            if (localStorage.theme === 'light' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: light)').matches)) {
+                htmlEl.classList.remove('dark');
+            } else {
+                htmlEl.classList.add('dark');
+            }
+        }
+        initTheme();
+        
+        themeToggle.addEventListener('click', () => {
+            htmlEl.classList.toggle('dark');
+            localStorage.theme = htmlEl.classList.contains('dark') ? 'dark' : 'light';
+        });
+
+        // --- Warning Modal Logic ---
+        function showWarning(msg) {
+            warningMessage.innerHTML = msg.replace(/\n/g, '<br>');
+            warningModal.classList.remove('hidden');
+            requestAnimationFrame(() => {
+                warningModal.classList.remove('opacity-0');
+                warningModalContent.classList.remove('scale-95');
+                warningModalContent.classList.add('scale-100');
+            });
+        }
+
+        window.closeWarningModal = function() {
+            warningModal.classList.add('opacity-0');
+            warningModalContent.classList.remove('scale-100');
+            warningModalContent.classList.add('scale-95');
+            setTimeout(() => {
+                warningModal.classList.add('hidden');
+            }, 300);
+        }
+
+        // --- File Handling ---
+        dropZone.addEventListener('click', (e) => {
+            if(e.target !== resetBtn && !resetBtn.contains(e.target)) fileInput.click();
+        });
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('border-miku-base', 'bg-miku-light/20');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('border-miku-base', 'bg-miku-light/20');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-miku-base', 'bg-miku-light/20');
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) handleFile(e.target.files[0]);
+        });
+
+        resetBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            resetUI();
+        });
+
+        function resetUI() {
+            fileInput.value = '';
+            previewImg.src = '';
+            previewImg.classList.add('hidden');
+            resetBtn.classList.add('hidden');
+            uploadPlaceholder.classList.remove('hidden');
+            
+            positiveText.value = '';
+            negativeText.value = '';
+            negativeText.disabled = false; 
+            negativeText.classList.remove('opacity-50', 'cursor-not-allowed');
+
+            rawMetadata.textContent = '暂无数据';
+            currentRawData = "";
+            
+            parseStatus.textContent = '等待图片...';
+            parseStatus.className = 'text-sm font-medium text-gray-500 dark:text-gray-400';
+            fileTypeTag.textContent = 'UNK';
+            
+            ['paramSteps', 'paramSampler', 'paramSeed', 'paramModel'].forEach(id => document.getElementById(id).innerText = '-');
+            
+            exportBtn.disabled = true;
+        }
+
+        async function handleFile(file) {
+            if (!file.type.startsWith('image/')) return alert('请上传图片文件');
+            
+            resetUI();
+
+            // --- 1. Check File Type (Modal Warning) ---
+            if (file.type !== 'image/png') {
+                showWarning("当前仅支持解析 <b class='text-miku-base'>PNG</b> 格式的原图。<br><br>JPG / WEBP 等格式通常不包含完整的生成参数，因此无法解析。");
+            }
+
+            // Display Preview
+            const url = URL.createObjectURL(file);
+            previewImg.src = url;
+            previewImg.classList.remove('hidden');
+            resetBtn.classList.remove('hidden');
+            uploadPlaceholder.classList.add('hidden');
+            
+            fileTypeTag.textContent = file.type.split('/')[1].toUpperCase();
+            parseStatus.textContent = "正在解析元数据...";
+            parseStatus.className = "text-sm font-bold text-miku-base animate-pulse";
+            
+            // Start Parsing
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                if (file.type === 'image/png') {
+                    parsePNG(arrayBuffer);
+                } else {
+                    parseStatus.textContent = "不支持的图片格式";
+                    parseStatus.className = "text-sm font-bold text-gray-400";
+                }
+            } catch (err) {
+                console.error(err);
+                parseStatus.textContent = "解析出错";
+            }
+        }
+
+        // --- Metadata Parser Logic (PNG) ---
+        
+        function parsePNG(buffer) {
+            const dataView = new DataView(buffer);
+            let offset = 8; 
+            let foundParams = false;
+            let foundComfy = false;
+
+            const textDecoder = new TextDecoder('utf-8');
+
+            while (offset < dataView.byteLength) {
+                const length = dataView.getUint32(offset);
+                const type = textDecoder.decode(new Uint8Array(buffer, offset + 4, 4));
+                
+                if (type === 'tEXt' || type === 'iTXt') {
+                    const chunkDataStart = offset + 8;
+                    const chunkData = new Uint8Array(buffer, chunkDataStart, length);
+                    
+                    let nullIndex = -1;
+                    for(let i=0; i<chunkData.length; i++) {
+                        if (chunkData[i] === 0) {
+                            nullIndex = i;
+                            break;
+                        }
+                    }
+
+                    if (nullIndex > -1) {
+                        const keyword = textDecoder.decode(chunkData.slice(0, nullIndex));
+                        const text = textDecoder.decode(chunkData.slice(nullIndex + 1)); 
+                        
+                        if (keyword === 'parameters') {
+                            foundParams = true;
+                            processA1111Data(text);
+                        }
+                        
+                        if (keyword === 'prompt' || keyword === 'workflow') {
+                            foundComfy = true;
+                            try {
+                                const json = JSON.parse(text);
+                                processComfyData(json, keyword);
+                            } catch(e) { console.error("JSON Parse Error", e); }
+                        }
+                    }
+                }
+                
+                offset += 12 + length; 
+            }
+
+            if (foundParams) {
+                parseStatus.textContent = "识别到 WebUI (A1111) 元数据";
+                parseStatus.className = "text-sm font-bold text-green-500";
+                exportBtn.disabled = false;
+            } else if (foundComfy) {
+                parseStatus.textContent = "识别到 ComfyUI 工作流";
+                parseStatus.className = "text-sm font-bold text-blue-500";
+                exportBtn.disabled = false;
+            } else {
+                parseStatus.textContent = "未找到生成信息";
+                parseStatus.className = "text-sm font-bold text-rose-500";
+                positiveText.value = ""; // Clear placeholder
+                
+                // --- 2. Check No Metadata (Modal Warning) ---
+                showWarning("未在图片中检测到有效的生成元数据。<br><br>可能原因：<br>1. 这不是一张 AI 生成的原图<br>2. 图片经过压缩或编辑，元数据已丢失<br>3. 生成时未开启保存参数功能");
+            }
+        }
+
+        function processA1111Data(text) {
+            rawMetadata.textContent = text;
+            currentRawData = text;
+            currentRawType = "txt";
+            
+            const parts = text.split('\nNegative prompt:');
+            if (parts.length >= 1) {
+                positiveText.value = parts[0].trim();
+            }
+            if (parts.length >= 2) {
+                const remaining = parts[1].split('\n');
+                negativeText.value = remaining[0].trim();
+                
+                const settingsLine = remaining[remaining.length - 1];
+                extractSettings(settingsLine);
+            }
+        }
+
+        function processComfyData(json, type) {
+            const jsonStr = JSON.stringify(json, null, 2);
+            rawMetadata.textContent = jsonStr;
+            currentRawData = jsonStr;
+            currentRawType = "json";
+            
+            let pos = [];
+            let seed = '-', steps = '-', sampler = '-', model = '-';
+
+            const nodes = type === 'workflow' ? json.nodes : Object.values(json);
+            
+            if (nodes) {
+                Object.values(nodes).forEach(node => {
+                    const widgetValues = node.widgets_values || (node.inputs ? Object.values(node.inputs) : []);
+                    const title = (node.title || node._meta?.title || "").toLowerCase();
+                    const classType = (node.class_type || node.type || "").toLowerCase();
+
+                    if (classType.includes('cliptextencode') || classType.includes('prompt')) {
+                        widgetValues.forEach(val => {
+                            if (typeof val === 'string' && val.length > 5) {
+                                if (!title.includes('neg')) {
+                                    pos.push(val);
+                                }
+                            }
+                        });
+                    }
+
+                    if (classType.includes('ksampler')) {
+                        const inputs = node.widgets_values || node.inputs;
+                        if (Array.isArray(inputs)) {
+                            inputs.forEach(v => {
+                                if (typeof v === 'number') {
+                                    if (v > 1000) seed = v; 
+                                    if (v > 0 && v <= 100) steps = v; 
+                                }
+                                if (typeof v === 'string' && (v.includes('euler') || v.includes('dpm'))) sampler = v;
+                            });
+                        } else if (inputs) {
+                            if (inputs.seed) seed = inputs.seed;
+                            if (inputs.steps) steps = inputs.steps;
+                            if (inputs.sampler_name) sampler = inputs.sampler_name;
+                        }
+                    }
+                    
+                    if (classType.includes('checkpoint')) {
+                         const inputs = node.widgets_values || node.inputs;
+                         if (Array.isArray(inputs)) {
+                             inputs.forEach(v => { if(typeof v === 'string' && v.includes('.')) model = v; });
+                         } else if (inputs && inputs.ckpt_name) {
+                             model = inputs.ckpt_name;
+                         }
+                    }
+                });
+            }
+
+            positiveText.value = pos.join('\n\n');
+            
+            negativeText.value = "⚠️ 由于 ComfyUI 特性，解析出来的负向提示词是内嵌在正向提示词里面的，请自行仔细辨别（通常会在最前面）。";
+            negativeText.disabled = true;
+            negativeText.classList.add('opacity-50', 'cursor-not-allowed');
+            
+            updateParam('paramSteps', steps);
+            updateParam('paramSampler', sampler);
+            updateParam('paramSeed', seed);
+            updateParam('paramModel', model);
+        }
+
+        function extractSettings(line) {
+            const getVal = (key) => {
+                const regex = new RegExp(`${key}:\\s*([^,]+)`);
+                const match = line.match(regex);
+                return match ? match[1] : '-';
+            };
+
+            updateParam('paramSteps', getVal('Steps'));
+            updateParam('paramSampler', getVal('Sampler'));
+            updateParam('paramSeed', getVal('Seed'));
+            updateParam('paramModel', getVal('Model'));
+        }
+
+        function updateParam(id, value) {
+            const el = document.getElementById(id);
+            el.innerText = value;
+            el.title = value; 
+        }
+        
+        function copyParam(id) {
+            const text = document.getElementById(id).innerText;
+            if(!text || text === '-') return;
+            
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            
+            const el = document.getElementById(id).parentElement;
+            
+            el.classList.add('border-green-500', 'bg-green-50', 'dark:border-green-500', 'dark:bg-green-900/20');
+            setTimeout(() => {
+                el.classList.remove('border-green-500', 'bg-green-50', 'dark:border-green-500', 'dark:bg-green-900/20');
+            }, 500);
+        }
+
+        exportBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!currentRawData) return;
+
+            const blob = new Blob([currentRawData], { type: "text/plain;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `prompt_data.${currentRawType}`; 
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const targetId = btn.dataset.target;
+                const text = document.getElementById(targetId).value;
+                if (!text) return;
+                
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+
+                const original = btn.innerHTML;
+                
+                btn.innerHTML = '<i data-lucide="check" class="w-4 h-4 text-green-500"></i>';
+                lucide.createIcons();
+                setTimeout(() => {
+                    btn.innerHTML = original;
+                    lucide.createIcons();
+                }, 1500);
+            });
+        });
+
+        lucide.createIcons();
+    </script>
+</body>
+</html>
