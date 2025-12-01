@@ -180,9 +180,15 @@
                             <label class="text-sm font-bold text-miku-base flex items-center gap-2">
                                 <i data-lucide="thumbs-up" class="w-4 h-4"></i> 正向提示词 (Positive)
                             </label>
-                            <button class="copy-btn p-1.5 hover:bg-miku-light dark:hover:bg-gray-700 rounded-lg text-gray-400 hover:text-miku-base transition-colors" data-target="positiveText">
-                                <i data-lucide="copy" class="w-4 h-4"></i>
-                            </button>
+                            <div class="flex gap-2">
+                                <!-- Swap Button -->
+                                <button id="swapBtn" class="p-1.5 hover:bg-purple-50 dark:hover:bg-gray-700 rounded-lg text-purple-400 hover:text-purple-500 transition-colors hidden" title="交换正负向提示词 (用于修正 ComfyUI 顺序)">
+                                    <i data-lucide="arrow-up-down" class="w-4 h-4"></i>
+                                </button>
+                                <button class="copy-btn p-1.5 hover:bg-miku-light dark:hover:bg-gray-700 rounded-lg text-gray-400 hover:text-miku-base transition-colors" data-target="positiveText">
+                                    <i data-lucide="copy" class="w-4 h-4"></i>
+                                </button>
+                            </div>
                         </div>
                         <div class="relative">
                             <textarea id="positiveText" readonly class="w-full h-32 bg-gray-50/50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-sm resize-none focus:outline-none focus:border-miku-base transition-all font-sans leading-relaxed custom-scrollbar" placeholder="等待解析..."></textarea>
@@ -300,6 +306,7 @@
         const parseStatus = document.getElementById('parseStatus');
         const fileTypeTag = document.getElementById('fileTypeTag');
         const exportBtn = document.getElementById('exportBtn');
+        const swapBtn = document.getElementById('swapBtn');
         
         // Warning Modal Elements
         const warningModal = document.getElementById('warningModal');
@@ -394,6 +401,7 @@
             ['paramSteps', 'paramSampler', 'paramSeed', 'paramModel'].forEach(id => document.getElementById(id).innerText = '-');
             
             exportBtn.disabled = true;
+            swapBtn.classList.add('hidden'); // Hide swap button on reset
         }
 
         async function handleFile(file) {
@@ -522,7 +530,7 @@
             currentRawData = jsonStr;
             currentRawType = "json";
             
-            let pos = [];
+            let textNodes = [];
             let seed = '-', steps = '-', sampler = '-', model = '-';
 
             const nodes = type === 'workflow' ? json.nodes : Object.values(json);
@@ -533,16 +541,17 @@
                     const title = (node.title || node._meta?.title || "").toLowerCase();
                     const classType = (node.class_type || node.type || "").toLowerCase();
 
+                    // Collect ALL prompt text nodes
                     if (classType.includes('cliptextencode') || classType.includes('prompt')) {
                         widgetValues.forEach(val => {
-                            if (typeof val === 'string' && val.length > 5) {
-                                if (!title.includes('neg')) {
-                                    pos.push(val);
-                                }
+                            if (typeof val === 'string' && val.length > 1) { // Relaxed length check
+                                // We store all found texts to split later based on user heuristic
+                                textNodes.push(val);
                             }
                         });
                     }
 
+                    // KSampler Params
                     if (classType.includes('ksampler')) {
                         const inputs = node.widgets_values || node.inputs;
                         if (Array.isArray(inputs)) {
@@ -560,6 +569,7 @@
                         }
                     }
                     
+                    // Checkpoint
                     if (classType.includes('checkpoint')) {
                          const inputs = node.widgets_values || node.inputs;
                          if (Array.isArray(inputs)) {
@@ -571,11 +581,30 @@
                 });
             }
 
-            positiveText.value = pos.join('\n\n');
-            
-            negativeText.value = "⚠️ 由于 ComfyUI 特性，解析出来的负向提示词是内嵌在正向提示词里面的，请自行仔细辨别（通常会在最前面）。";
-            negativeText.disabled = true;
-            negativeText.classList.add('opacity-50', 'cursor-not-allowed');
+            // --- ComfyUI Heuristic Split ---
+            // User Observation: Negative Prompt is usually the 1st node, followed by Positive
+            if (textNodes.length >= 2) {
+                // Assume index 0 is Negative
+                negativeText.value = textNodes[0];
+                // Assume index 1+ are Positive
+                positiveText.value = textNodes.slice(1).join('\n\n');
+                
+                // Enable input and show swap button in case order is reversed
+                negativeText.disabled = false;
+                negativeText.classList.remove('opacity-50', 'cursor-not-allowed');
+                swapBtn.classList.remove('hidden'); 
+            } else if (textNodes.length === 1) {
+                // Only one text node found, put in positive
+                positiveText.value = textNodes[0];
+                negativeText.value = "";
+                negativeText.disabled = false;
+                negativeText.classList.remove('opacity-50', 'cursor-not-allowed');
+                swapBtn.classList.add('hidden');
+            } else {
+                positiveText.value = "未找到文本节点";
+                negativeText.value = "";
+                swapBtn.classList.add('hidden');
+            }
             
             updateParam('paramSteps', steps);
             updateParam('paramSampler', sampler);
@@ -594,6 +623,9 @@
             updateParam('paramSampler', getVal('Sampler'));
             updateParam('paramSeed', getVal('Seed'));
             updateParam('paramModel', getVal('Model'));
+            
+            // Hide swap button for WebUI (it already separates correctly)
+            swapBtn.classList.add('hidden');
         }
 
         function updateParam(id, value) {
@@ -601,6 +633,19 @@
             el.innerText = value;
             el.title = value; 
         }
+        
+        // --- Swap Button Logic ---
+        swapBtn.addEventListener('click', () => {
+            const posVal = positiveText.value;
+            const negVal = negativeText.value;
+            
+            positiveText.value = negVal;
+            negativeText.value = posVal;
+            
+            // Visual feedback
+            swapBtn.classList.add('text-purple-600', 'rotate-180');
+            setTimeout(() => swapBtn.classList.remove('text-purple-600', 'rotate-180'), 300);
+        });
         
         function copyParam(id) {
             const text = document.getElementById(id).innerText;
